@@ -1,0 +1,17 @@
+GET /images/welcome.png HTTP/1.1
+Host: localhost:8080
+Connection: keep-alive
+Cache-Control: max-age=0
+sec-ch-ua: "Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"
+sec-ch-ua-mobile: ?0
+sec-ch-ua-platform: "Linux"
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Sec-Fetch-Site: none
+Sec-Fetch-Mode: navigate
+Sec-Fetch-User: ?1
+Sec-Fetch-Dest: document
+Accept-Encoding: gzip, deflate, br
+Accept-Language: en-US,en;q=0.9
+Cookie: _xsrf=2|279ca58b|fc644669b7463e7f239e515b1778beba|1677526449; username-localhost-8888="2|1:0|10:1677793485|23:username-localhost-8888|44:OTgyZTM4N2E3NDE1NGE5MDk2MTdmMmM4Y2U1NzBmNGU=|b878d6f23ccd04b0c58f384b5563c2b9ac98ca2141fa298ea60c471f9e3d18d7"; username-localhost-8889="2|1:0|10:1677867058|23:username-localhost-8889|44:NjBhOWFkNDAyMWZlNDc1MGJkODhlZTM4NjkwNDc0NGQ=|dd2e085a83d983a4e1b782d7ecd71b44656a7848a01482b50f74d5ba4c1d3e96"
