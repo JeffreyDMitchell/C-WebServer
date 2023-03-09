@@ -127,6 +127,12 @@ int parseFile()
 
 }
 
+void destroyFMD(struct f_metadata * fmd)
+{
+    fclose(fmd->f_ptr);
+    free(fmd);
+}
+
 int getFileType(char *path)
 {
     regex_t reg;
@@ -172,6 +178,9 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
         return -1;
     }
 
+    // valid http version, aim to match
+    strcpy(resp->http_ver, req->http_ver);
+
     char * adj_path = malloc(strlen(DIR) + strlen(req->uri));
     sprintf(adj_path, "%s%s", DIR, req->uri);
 
@@ -179,8 +188,29 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
     // should this be a different status?
     if(!isFile(adj_path))
     {
-        strcpy(resp->status, NOTFND);
-        return -1;
+        // request was for a directory, look for index.htm(l)
+        // this is janky and ugly :)
+
+        // making room for addition of index.htm(l), up to 10 characters
+        int len = strlen(adj_path);
+        if(!realloc(adj_path, len + 10))
+        {
+            printf("realloc failure\n");
+            exit(-1);
+        }
+
+        // checking index.html
+        strcpy(adj_path + len, "index.html");
+        if(access(adj_path, F_OK))
+        {
+            // checking index.html
+            strcpy(adj_path + len, "index.htm");
+            if(access(adj_path, F_OK))
+            {
+                strcpy(resp->status, NOTFND);
+                return -1;
+            }
+        }
     }
 
     // TODO maybe regex for valid uri? marybe just try to open file. idk
@@ -214,7 +244,10 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
     rewind(resp->fmd_ptr->f_ptr);
 
     // get file type
-    resp->fmd_ptr->f_type = getFileType(req->uri);
+    resp->fmd_ptr->f_type = getFileType(adj_path);
+
+    // path no longer needed, can be freed
+    free(adj_path);
 
     return 0;
 }
@@ -234,7 +267,6 @@ int parseRequest(char * req_text, struct http_req * req)
     strncpy(req->method, token, HTTP_METH_LEN - 1);
 
     // extract URI
-
     token = strtok(NULL, " ");
     if(token == NULL)
         return -1;
@@ -344,14 +376,14 @@ int main(int argc, char* argv[])
         recv(client_sock, request_buf, MAX_REQ_LEN, 0);
 
         // TODO debug remove
-        printf("DEBUG transmission recieved:\n%s\n\n", request_buf);
+        // printf("DEBUG transmission recieved:\n%s\n\n", request_buf);
 
         // generate response to given request
         struct http_resp resp;
         clearResp(&resp);
         int res = processRequest(request_buf, &resp);
 
-        printf("DEBUG: response header:\n%s %s\r\n\r\n", resp.http_ver, resp.status);
+        // printf("DEBUG: response header:\n%s %s\r\n\r\n", resp.http_ver, resp.status);
 
         // respond to request
         // TODO determine filetype
@@ -360,18 +392,11 @@ int main(int argc, char* argv[])
             resp.http_ver,
             resp.status);
         else
-        {
-
-            // printf("HERE: CONTENT NUM: %d\n", resp.fmd_ptr->f_type);
-
-            // printf("HERE: CONTENT TYPE: %s\n", content_type);
-
             sprintf(response_buf, "%s %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\n\r\n",
             resp.http_ver,
             resp.status,
             contentTypeString(resp.fmd_ptr->f_type),
             resp.fmd_ptr->f_size);
-        }
             
 
         send(client_sock, response_buf, strlen(response_buf), 0);
@@ -387,42 +412,7 @@ int main(int argc, char* argv[])
             }
         }
 
-
-        // char request[4096];
-        // memset(request, 0, MAX_REQ_LEN);
-
-        // recv(client_sock, request, MAX_REQ_LEN, 0);
-
-        // // printf("request recieved.\n");
-
-        // // printf("%s\n\n\n\n", request);
-
-        // struct http_resp resp;
-
-        // clearResp(&resp);
-        // processRequest(request, &resp);
-
-        // // printf("%s %s\r\n\r\n", resp.http_ver, resp.status);
-
-
-        // // send response header TODO make a funciton, and nicer
-        // char *response = malloc(1000);
-        // sprintf(response, "%s %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\n\r\n", resp.http_ver, resp.status, content_type, resp.fmd_ptr->f_size);
-        // send(client_sock, response, strlen(response) + 1, 0);
-
-        // // send file, if applicable
-        // if(resp.fmd_ptr->f_ptr != NULL)
-        // {
-        //     int bytes;
-        //     char send_buffer[SEND_BUF_SIZE];
-
-        //     while((bytes = fread(send_buffer, 1, SEND_BUF_SIZE, resp.fmd_ptr->f_ptr)))
-        //     {
-        //         // TODO check for unset bits
-        //         send(client_sock, send_buffer, bytes, 0);
-        //         printf("send\n");
-        //     }
-        // }
+        destroyFMD(resp.fmd_ptr);
 
         // TODO is this needed? is this beneficial
         // shutdown(client_sock, SHUT_RDWR);
