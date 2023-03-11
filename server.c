@@ -1,9 +1,7 @@
 /* 
     TODO
     partial inbound request support
-    partial send support
     fix parsing, make sure error is always right
-    respond with HTTP version from request
 */
 
 #include <stdio.h>
@@ -18,9 +16,11 @@
 #include <arpa/inet.h>
 #include <regex.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define MAX_QUEUED_CONNECTIONS 3
-#define MAX_REQ_LEN 4096
+#define MAX_REQ_LEN 8192
 #define MAX_FILE_NAME 256
 #define MAX_URI 512
 #define MAX_STATUS_LEN 31
@@ -77,10 +77,37 @@ struct netinfo
     socklen_t addr_len;
 };
 
+// citation: http://www.microhowto.info/howto/reap_zombie_processes_using_a_sigchld_handler.html
+void handle_sigchld(int sig) 
+{
+    int saved_errno = errno;
+    while (waitpid((pid_t)(-1), 0, WNOHANG) > 0);
+    errno = saved_errno;
+}
+
 int min(int a, int b)
 {
     return a < b ? a : b;
 }
+
+// Beej's sendall function. mostly.
+// citation https://beej.us/guide/bgnet/html/
+int sendAll(int s, char *buf, int len)
+{
+    int total = 0;        
+    int bytesleft = len; 
+    int n;
+
+    while(bytesleft) 
+    {
+        n = send(s, buf+total, bytesleft, 0);
+        if (n == -1) return -1;
+        total += n;
+        bytesleft -= n;
+    }
+
+    return total;
+} 
 
 // citation: https://stackoverflow.com/questions/4553012/checking-if-a-file-is-a-directory-or-just-a-file
 int isFile(const char *path)
@@ -104,27 +131,12 @@ void clearResp(struct http_resp *resp)
     resp->fmd_ptr = NULL;
 }
 
-// int generateResponsePacket(struct http_resp * resp)
-// {
-//     char *response = malloc(strlen(resp.status) + strlen(resp.http_ver) + 2);
-//     sprintf(response, "%s %s", resp.http_ver, resp.status);
-
-//     send(client_sock, response, strlen(response) + 1, 0);
-
-//     if(resp.fmd_ptr->f_ptr != NULL)
-// }
-
 char * contentTypeString(int cont_type)
 {
-    static char hits[FILETYPE_CT][100] = {"text/html", "image/png", "image/gif", "image/jpg", "image/x-icon", "text/css", "application/javascript"};
+    // 23 is the longest string in the list
+    static char hits[FILETYPE_CT][23] = {"text/html", "image/png", "image/gif", "image/jpg", "image/x-icon", "text/css", "application/javascript"};
 
     return hits[cont_type];
-}
-
-// TODO must free
-int parseFile()
-{
-
 }
 
 void destroyFMD(struct f_metadata * fmd)
@@ -142,15 +154,15 @@ int getFileType(char *path)
     
     if(regcomp(&reg, "\\.[a-zA-Z0-9]+$", REG_EXTENDED))
     {
-        printf("Regex compilation failed.\n");
-        return -1;
+        printf("Regex compilation failed. (determine filetype)\n");
+        exit(-1);
     }
     
-    // TODO dont just fail, probably return text
+    // in the event no determination could be made, treat it as text.
     if(regexec(&reg, path, 1, &reg_match, 0) == REG_NOMATCH)
     {
         printf("No regex match found.\n");
-        return -1;
+        return TXT;
     }
 
     // TODO think there might be a potential bug here
@@ -166,12 +178,6 @@ int getFileType(char *path)
 
 int validateRequest(struct http_req *req, struct http_resp *resp)
 {
-    if(strcmp(req->method, "GET"))
-    {
-        strcpy(resp->status, BADMETH);
-        return -1;
-    }
-
     if(strcmp(req->http_ver, "HTTP/1.0") && strcmp(req->http_ver, "HTTP/1.1"))
     {
         strcpy(resp->status, BADHTTP);
@@ -181,11 +187,15 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
     // valid http version, aim to match
     strcpy(resp->http_ver, req->http_ver);
 
+    if(strcmp(req->method, "GET"))
+    {
+        strcpy(resp->status, BADMETH);
+        return -1;
+    }
+
     char * adj_path = malloc(strlen(DIR) + strlen(req->uri));
     sprintf(adj_path, "%s%s", DIR, req->uri);
 
-    // TODO kinda terrible, ensures that request is not a directory
-    // should this be a different status?
     if(!isFile(adj_path))
     {
         // request was for a directory, look for index.htm(l)
@@ -254,10 +264,29 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
 
 int parseRequest(char * req_text, struct http_req * req)
 {
-    char *token;
-    // why on earth does this segfault?
-    // memset(&req, '\0', sizeof(req));
+    regex_t reg;
+    regmatch_t reg_match;
+    char match[MAX_FILE_EXT];
+    char * token;
+
     clearReq(req);
+    
+    if(regcomp(&reg, "^[A-Z]+ (/[^/ ]*)+ HTTP/[0-9]+\\.[0-9]+$", REG_EXTENDED))
+    {
+        printf("Regex compilation failed. (parse request)\n");
+        return -1;
+    }
+
+    // extract entire starting line
+    if(!(token = strtok(req_text, "\r\n")))
+        return -1;
+
+    // quick and dirty regex to verify overall form
+    if(regexec(&reg, token, 1, &reg_match, 0) == REG_NOMATCH)
+    {
+        printf("No regex match found.\n");
+        return -1;
+    }
 
     // extract method
     token = strtok(req_text, " ");
@@ -307,6 +336,9 @@ int main(int argc, char* argv[])
     struct netinfo server_info, client_info;
     pid_t pid;
 
+    // no more zombies
+    signal(SIGCHLD, handle_sigchld);
+
     if(argc < 2)
     {
         printf("Usage: %s [PORT]\n", argv[0]);
@@ -319,6 +351,7 @@ int main(int argc, char* argv[])
         printf("Bad port.\n");
         exit(-1);
     }
+
 
     // configuring server info
     memset(&server_info, 0, sizeof(server_info));
@@ -386,7 +419,6 @@ int main(int argc, char* argv[])
         // printf("DEBUG: response header:\n%s %s\r\n\r\n", resp.http_ver, resp.status);
 
         // respond to request
-        // TODO determine filetype
         if(res)
             sprintf(response_buf, "%s %s\r\n\r\n",
             resp.http_ver,
@@ -399,17 +431,14 @@ int main(int argc, char* argv[])
             resp.fmd_ptr->f_size);
             
 
-        send(client_sock, response_buf, strlen(response_buf), 0);
+        sendAll(client_sock, response_buf, strlen(response_buf));
 
         // send file, if applicable
         if(resp.fmd_ptr->f_ptr != NULL)
         {
             int bytes;
             while((bytes = fread(response_buf, 1, SEND_BUF_SIZE, resp.fmd_ptr->f_ptr)))
-            {
-                // TODO check for unset bits
-                send(client_sock, response_buf, bytes, 0);
-            }
+                sendAll(client_sock, response_buf, bytes);
         }
 
         destroyFMD(resp.fmd_ptr);
