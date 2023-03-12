@@ -1,7 +1,5 @@
 /* 
     TODO
-    partial inbound request support
-    fix parsing, make sure error is always right
 */
 
 #include <stdio.h>
@@ -78,11 +76,21 @@ struct netinfo
 };
 
 // citation: http://www.microhowto.info/howto/reap_zombie_processes_using_a_sigchld_handler.html
-void handle_sigchld(int sig) 
+void handleSIGCHLD(int sig) 
 {
     int saved_errno = errno;
     while (waitpid((pid_t)(-1), 0, WNOHANG) > 0);
     errno = saved_errno;
+}
+
+void handleSIGINT(int sig) 
+{
+    printf("Closing connections...\n");
+    int saved_errno = errno;
+    while (waitpid((pid_t)(-1), 0, WNOHANG) > 0);
+    errno = saved_errno;
+    printf("Connections closed.\n");
+    exit(0);
 }
 
 int min(int a, int b)
@@ -165,7 +173,6 @@ int getFileType(char *path)
         return TXT;
     }
 
-    // TODO think there might be a potential bug here
     memset(match, 0, MAX_FILE_EXT);
     strncpy(match, path + reg_match.rm_so, min(reg_match.rm_eo - reg_match.rm_so, MAX_FILE_EXT - 1));
 
@@ -223,7 +230,6 @@ int validateRequest(struct http_req *req, struct http_resp *resp)
         }
     }
 
-    // TODO maybe regex for valid uri? marybe just try to open file. idk
     if(access(adj_path, R_OK))
     {
         switch(errno)
@@ -317,12 +323,11 @@ int processRequest(char * req_text, struct http_resp  *resp)
     struct http_req req;
     clearReq(&req);
 
-    // TODO is there any way to set this in struct definition?
+    // default version will be 1.1, can be modified to match request later
     strcpy(resp->http_ver, "HTTP/1.1");
 
     if(parseRequest(req_text, &req))
     {
-        // printf("failed to parse request.\n");
         strcpy(resp->status, BADREQ);
         return -1;
     }
@@ -335,9 +340,11 @@ int main(int argc, char* argv[])
     int server_sock, client_sock;
     struct netinfo server_info, client_info;
     pid_t pid;
+    int sigset;
 
     // no more zombies
-    signal(SIGCHLD, handle_sigchld);
+    signal(SIGCHLD, handleSIGCHLD);
+    signal(SIGINT, handleSIGINT);
 
     if(argc < 2)
     {
@@ -389,6 +396,7 @@ int main(int argc, char* argv[])
         if((client_sock = accept(server_sock, (struct sockaddr *) &client_info.sin, (socklen_t *) &client_info.addr_len)) == -1)
             printf("Accept failure.\n");
 
+
         // parent process
         if((pid = fork()))
         {
@@ -397,6 +405,9 @@ int main(int argc, char* argv[])
         }
 
         // children only
+        // children ignore sigint, finishing their transmission
+        signal(SIGINT, SIG_IGN);
+        // close listening socket
         close(server_sock);
 
         // BEGIN CONNECTION TASKS
@@ -408,15 +419,10 @@ int main(int argc, char* argv[])
         // recieve inbound transmission
         recv(client_sock, request_buf, MAX_REQ_LEN, 0);
 
-        // TODO debug remove
-        // printf("DEBUG transmission recieved:\n%s\n\n", request_buf);
-
         // generate response to given request
         struct http_resp resp;
         clearResp(&resp);
         int res = processRequest(request_buf, &resp);
-
-        // printf("DEBUG: response header:\n%s %s\r\n\r\n", resp.http_ver, resp.status);
 
         // respond to request
         if(res)
